@@ -1,0 +1,165 @@
+#define BLYNK_TEMPLATE_ID "TMPL3LvKVNdGx"
+#define BLYNK_TEMPLATE_NAME "Air Quality Monitoring"
+#define BLYNK_AUTH_TOKEN "C6hdqtrV0vlVpXmL4g-E6B-8nPwenIPL"
+
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <DHT.h>
+#include <BlynkSimpleEsp32.h>
+#include <ESP32Servo.h>
+
+// *WiFi Credentials*
+char ssid[] = "ESP32";
+char pass[] = "12345678";
+
+// *LCD Setup*
+#define LCD_ADDRESS 0x27  
+LiquidCrystal_I2C lcd(LCD_ADDRESS, 16, 2);
+
+// *DHT11 Sensor Setup*
+#define DHTPIN 4
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+// *MQ-2 Gas Sensor*
+#define MQ2_ANALOG 34
+#define MQ2_DIGITAL 26
+
+// *Alert Pin (Buzzer/LED)*
+int alertPin = 15;
+
+// *Servo Setup*
+Servo myservo;  // Servo object
+int servoPos = 0; // Variable to store servo position
+
+// *Screen State*
+int screenState = 0;
+
+// *Blynk Function for Servo Control*
+BLYNK_WRITE(V3) {
+  servoPos = param.asInt();  // Read slider value
+  servoPos = constrain(servoPos, 0, 90); // Limit to 0-90 degrees
+  myservo.write(servoPos);  // Move servo
+
+  // *Send Servo Position to Blynk V4*
+  Blynk.virtualWrite(V4, servoPos);
+
+  Serial.print("Servo Angle: ");
+  Serial.println(servoPos);
+}
+
+void setup() {
+    Serial.begin(115200);
+
+    // *Initialize LCD*
+    Wire.begin();
+    lcd.init();
+    lcd.backlight();
+    lcd.setCursor(0, 0);
+    lcd.print("STARTING...");
+
+    // *Initialize DHT11*
+    dht.begin();
+
+    // *Set Pin Modes*
+    pinMode(MQ2_DIGITAL, INPUT);
+    pinMode(alertPin, OUTPUT);
+    digitalWrite(alertPin, LOW);
+
+    // *Connect to Blynk*
+    Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+
+    // *Attach Servo and Reset to 0°*
+    myservo.attach(27);
+    myservo.write(0);
+    Blynk.virtualWrite(V4, 0); // Send 0° to Blynk initially
+    Serial.println("Servo Reset to 0 Degrees");
+
+    Serial.println("System Initialized!");
+    delay(2000);
+}
+
+void loop() {
+    Blynk.run();
+
+    delay(3000);  // Wait 3 seconds before next reading
+
+    // *Read Temperature & Humidity*
+    float temp = dht.readTemperature();
+    float hum = dht.readHumidity();
+
+    if (isnan(temp) || isnan(hum)) {
+        Serial.println("Failed to read from DHT sensor! Retrying...");
+        dht.begin();
+        return;
+    }
+
+    // *Read Gas Sensor (Analog)*
+    int gasValue = analogRead(MQ2_ANALOG);
+    Serial.print("Gas Level: ");
+    Serial.println(gasValue);
+    Serial.print("Temperature: ");
+    Serial.println(temp);
+    Serial.print("Humidity: ");
+    Serial.println(hum);
+
+    // *Send Data to Blynk*
+    Blynk.virtualWrite(V0, temp);
+    Blynk.virtualWrite(V1, hum);
+    Blynk.virtualWrite(V2, gasValue);
+    Blynk.virtualWrite(V4, servoPos);  // Send current servo position
+
+    // *Send Alerts*
+    if (gasValue >= 1000) {
+        Blynk.logEvent("gas_alert", "⚠ High Gas Level! Value: " + String(gasValue));
+        digitalWrite(alertPin, HIGH);
+    } else {
+        digitalWrite(alertPin, LOW);
+    }
+
+    if (temp > 35) {
+        Blynk.logEvent("temp_alert", "🔥 High Temperature Alert! Temp: " + String(temp) + "°C");
+    }
+
+    // *Cycle Display Every 3 Seconds*
+    lcd.clear();
+    if (screenState == 0) {
+        // *Screen 1: Temperature & Humidity*
+        lcd.setCursor(0, 0);
+        lcd.print("Temp: ");
+        lcd.print(temp);
+        lcd.print("C");
+
+        lcd.setCursor(0, 1);
+        lcd.print("Humidity: ");
+        lcd.print(hum);
+        lcd.print("%");
+
+    } else {
+        // *Screen 2: Gas Level & Alert Status*
+        lcd.setCursor(0, 0);
+        lcd.print("Gas Level: ");
+        lcd.print(gasValue);
+
+        lcd.setCursor(0, 1);
+        if (gasValue >= 1000) {
+            lcd.print("NOT SAFE ZONE");
+        } else {
+            lcd.print("SAFE ZONE");
+        }
+    }
+    if (gasValue >= 100) {
+    Blynk.logEvent("gas_value", "⚠ High Gas Level! Value: " + String(gasValue));
+    digitalWrite(alertPin, HIGH);
+} else {
+    digitalWrite(alertPin, LOW);
+}
+
+if (temp > 35) {
+    Blynk.logEvent("gas_value", "🔥 High Temperature Alert! Temp: " + String(temp) + "°C");
+}
+
+
+    // *Switch Screens*
+    screenState = 1 - screenState;
+}
